@@ -133,6 +133,7 @@ public class ReorderJoins
     @Override
     public Result apply(JoinNode joinNode, Captures captures, Context context)
     {
+        log.debug("Entered ReorderJoins");
         // try reorder joins with projection pushdown first
         MultiJoinNode multiJoinNode = toMultiJoinNode(plannerContext, joinNode, context, true, typeAnalyzer);
         JoinEnumerationResult resultWithProjectionPushdown = chooseJoinOrder(multiJoinNode, context);
@@ -141,6 +142,7 @@ public class ReorderJoins
         }
 
         if (!multiJoinNode.isPushedProjectionThroughJoin()) {
+            log.debug("Project pushed thru Join, new Join order");
             return Result.ofPlanNode(resultWithProjectionPushdown.getPlanNode().get());
         }
 

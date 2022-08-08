@@ -13,6 +13,7 @@
  */
 package io.trino.cost;
 
+import io.airlift.log.Logger;
 import io.trino.Session;
 import io.trino.matching.Pattern;
 import io.trino.spi.connector.ColumnHandle;
@@ -37,43 +38,12 @@ import static java.util.Objects.requireNonNull;
 public class TableScanStatsRule
         extends SimpleStatsRule<TableScanNode>
 {
+    private static final Logger LOG = Logger.get(TableScanStatsRule.class);
     private static final Pattern<TableScanNode> PATTERN = tableScan();
 
     public TableScanStatsRule(StatsNormalizer normalizer)
     {
         super(normalizer); // Use stats normalization since connector can return inconsistent stats values
-    }
-
-    @Override
-    public Pattern<TableScanNode> getPattern()
-    {
-        return PATTERN;
-    }
-
-    @Override
-    protected Optional<PlanNodeStatsEstimate> doCalculate(TableScanNode node, StatsProvider sourceStats, Lookup lookup, Session session, TypeProvider types, TableStatsProvider tableStatsProvider)
-    {
-        if (isStatisticsPrecalculationForPushdownEnabled(session) && node.getStatistics().isPresent()) {
-            return node.getStatistics();
-        }
-
-        TableStatistics tableStatistics = tableStatsProvider.getTableStatistics(node.getTable());
-
-        Map<Symbol, SymbolStatsEstimate> outputSymbolStats = new HashMap<>();
-
-        for (Map.Entry<Symbol, ColumnHandle> entry : node.getAssignments().entrySet()) {
-            Symbol symbol = entry.getKey();
-            Optional<ColumnStatistics> columnStatistics = Optional.ofNullable(tableStatistics.getColumnStatistics().get(entry.getValue()));
-            SymbolStatsEstimate symbolStatistics = columnStatistics
-                    .map(statistics -> toSymbolStatistics(tableStatistics, statistics, types.get(symbol)))
-                    .orElse(SymbolStatsEstimate.unknown());
-            outputSymbolStats.put(symbol, symbolStatistics);
-        }
-
-        return Optional.of(PlanNodeStatsEstimate.builder()
-                .setOutputRowCount(tableStatistics.getRowCount().getValue())
-                .addSymbolStatistics(outputSymbolStats)
-                .build());
     }
 
     private static SymbolStatsEstimate toSymbolStatistics(TableStatistics tableStatistics, ColumnStatistics columnStatistics, Type type)
@@ -104,5 +74,40 @@ public class TableScanStatsRule
             result.setHighValue(range.getMax());
         });
         return result.build();
+    }
+
+    @Override
+    public Pattern<TableScanNode> getPattern()
+    {
+        return PATTERN;
+    }
+
+    @Override
+    protected Optional<PlanNodeStatsEstimate> doCalculate(TableScanNode node, StatsProvider sourceStats, Lookup lookup, Session session, TypeProvider types, TableStatsProvider tableStatsProvider)
+    {
+        if (isStatisticsPrecalculationForPushdownEnabled(session) && node.getStatistics().isPresent()) {
+            return node.getStatistics();
+        }
+
+        TableStatistics tableStatistics = tableStatsProvider.getTableStatistics(node.getTable());
+
+        Map<Symbol, SymbolStatsEstimate> outputSymbolStats = new HashMap<>();
+
+        for (Map.Entry<Symbol, ColumnHandle> entry : node.getAssignments().entrySet()) {
+            Symbol symbol = entry.getKey();
+            Optional<ColumnStatistics> columnStatistics = Optional.ofNullable(tableStatistics.getColumnStatistics().get(entry.getValue()));
+            SymbolStatsEstimate symbolStatistics = columnStatistics
+                    .map(statistics -> toSymbolStatistics(tableStatistics, statistics, types.get(symbol)))
+                    .orElse(SymbolStatsEstimate.unknown());
+            outputSymbolStats.put(symbol, symbolStatistics);
+        }
+
+        final PlanNodeStatsEstimate estimates = PlanNodeStatsEstimate.builder()
+                .setOutputRowCount(tableStatistics.getRowCount().getValue())
+                .addSymbolStatistics(outputSymbolStats)
+                .build();
+        LOG.debug("[%s] Table stats at planner layer are are : [%s]", node.getTable().toString(), estimates);
+
+        return Optional.of(estimates);
     }
 }

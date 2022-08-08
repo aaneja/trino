@@ -15,18 +15,26 @@ package io.trino.sql.planner.iterative;
 
 import com.google.common.collect.HashMultiset;
 import com.google.common.collect.Multiset;
+import io.airlift.log.Logger;
 import io.trino.cost.PlanCostEstimate;
 import io.trino.cost.PlanNodeStatsEstimate;
+import io.trino.metadata.TableHandle;
 import io.trino.sql.planner.PlanNodeIdAllocator;
+import io.trino.sql.planner.plan.JoinNode;
 import io.trino.sql.planner.plan.PlanNode;
+import io.trino.sql.planner.plan.TableScanNode;
+import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -63,19 +71,21 @@ import static java.util.Objects.requireNonNull;
  */
 public class Memo
 {
+    private static final Logger LOG = Logger.get(Memo.class);
+
     private static final int ROOT_GROUP_REF = 0;
 
     private final PlanNodeIdAllocator idAllocator;
     private final int rootGroup;
-
     private final Map<Integer, Group> groups = new HashMap<>();
-
+    private String prevJoinOrder = "";
     private int nextGroupId = ROOT_GROUP_REF + 1;
 
     public Memo(PlanNodeIdAllocator idAllocator, PlanNode plan)
     {
         this.idAllocator = idAllocator;
         rootGroup = insertRecursive(plan);
+        prevJoinOrder = computeJoinOrderFromRoot();
         groups.get(rootGroup).incomingReferences.add(ROOT_GROUP_REF);
     }
 
@@ -133,7 +143,88 @@ public class Memo
         decrementReferenceCounts(old, groupId);
         evictStatisticsAndCost(group);
 
+        logFullPlan(reason);
         return node;
+    }
+
+    private void logFullPlan(String reason)
+    {
+        final String newJoinOrder = computeJoinOrderFromRoot();
+        if (!newJoinOrder.equals(prevJoinOrder)) {
+            LOG.info("[%s] caused Join Order change : %s", reason, newJoinOrder);
+            prevJoinOrder = newJoinOrder;
+        }
+    }
+
+    @NotNull
+    private String computeJoinOrderFromRoot()
+    {
+        final PlanNode rootNode = getNode(getRootGroup());
+
+        StringBuilder joinOrder = new StringBuilder();
+        traversePostOrder(rootNode, joinOrder);
+        return joinOrder.toString();
+    }
+
+    private void traversePostOrder(PlanNode node, StringBuilder joinOrder)
+    {
+        GroupReference groupRef = null;
+        if (node instanceof GroupReference) {
+            //Get PlanNode if GroupNode
+            groupRef = (GroupReference) node;
+            node = getNode(groupRef.getGroupId());
+        }
+
+        for (PlanNode source : node.getSources()) {
+            //Traverse children first, i.e. do a post order traversal, giving us a postfix expression
+            //Will go left then right for Join Nodes
+            traversePostOrder(source, joinOrder);
+        }
+
+        //Next print the current node
+        if (node instanceof JoinNode) {
+            JoinNode jNode = (JoinNode) node;
+            String distributionType = jNode.getDistributionType().isPresent() ? jNode.getDistributionType().get().toString() : "NotAssigned";
+            String reorderJoinStatsAndCost = jNode.getReorderJoinStatsAndCost().isPresent() ? jNode.getReorderJoinStatsAndCost().get().toString() : "NoStatsAndCost";
+            joinOrder.append(String.format("Join[%s, %s, %s], ", jNode.getType(), distributionType, reorderJoinStatsAndCost));
+        }
+        else if (node instanceof TableScanNode) {
+            TableScanNode tNode = (TableScanNode) node;
+
+            joinOrder.append(getTableName(tNode.getTable()))
+                    .append(", ");
+        }
+        else if (node.getSources().size() > 1) {
+            joinOrder.append(String.format("Operator[%s] Operands[%d], ", node, node.getSources().size()));
+        }
+    }
+
+    /*
+    Gets String representation of GroupReference, if present
+     */
+    private String getStatsAndCost(GroupReference groupRef)
+    {
+        if (groupRef == null) {
+            return "NoStatsAndCost";
+        }
+        Optional<PlanNodeStatsEstimate> stats = getStats(groupRef.getGroupId());
+        Optional<PlanCostEstimate> cost = getCost(groupRef.getGroupId());
+
+        StringBuilder out = new StringBuilder();
+        stats.ifPresent(out::append);
+        cost.ifPresent(out::append);
+
+        return "" .equals(out.toString()) ? "NoStatsAndCost" : out.toString();
+    }
+
+    private String getTableName(TableHandle table)
+    {
+        try {
+            return table.toString().split(":")[2];
+        }
+        catch (Exception e) {
+            return table.toString();
+        }
     }
 
     private void evictStatisticsAndCost(Group group)
@@ -247,13 +338,8 @@ public class Memo
 
     private static final class Group
     {
-        static Group withMember(PlanNode member)
-        {
-            return new Group(member);
-        }
-
-        private PlanNode membership;
         private final Multiset<Integer> incomingReferences = HashMultiset.create();
+        private PlanNode membership;
         @Nullable
         private PlanNodeStatsEstimate stats;
         @Nullable
@@ -262,6 +348,11 @@ public class Memo
         private Group(PlanNode member)
         {
             this.membership = requireNonNull(member, "member is null");
+        }
+
+        static Group withMember(PlanNode member)
+        {
+            return new Group(member);
         }
     }
 }

@@ -68,4 +68,16 @@ public class PlanNodeStatsAndCostSummary
     {
         return networkCost;
     }
+
+    @Override
+    public String toString()
+    {
+        return "PlanNodeStatsAndCostSummary{" +
+                "outputRowCount=" + outputRowCount +
+                ", outputSizeInBytes=" + outputSizeInBytes +
+                ", cpuCost=" + cpuCost +
+                ", memoryCost=" + memoryCost +
+                ", networkCost=" + networkCost +
+                '}';
+    }
 }

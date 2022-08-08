@@ -17,6 +17,7 @@ package io.trino.sql.planner.iterative.rule;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
+import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.trino.cost.CostComparator;
 import io.trino.cost.LocalCostEstimate;
@@ -60,6 +61,8 @@ import static java.util.Objects.requireNonNull;
 public class DetermineJoinDistributionType
         implements Rule<JoinNode>
 {
+    private static final Logger log = Logger.get(DetermineJoinDistributionType.class);
+
     private static final Pattern<JoinNode> PATTERN = join().matching(joinNode -> joinNode.getDistributionType().isEmpty());
     private static final List<Class<? extends PlanNode>> EXPANDING_NODE_CLASSES = ImmutableList.of(JoinNode.class, UnnestNode.class);
     private static final double SIZE_DIFFERENCE_THRESHOLD = 8;
@@ -71,22 +74,6 @@ public class DetermineJoinDistributionType
     {
         this.costComparator = requireNonNull(costComparator, "costComparator is null");
         this.taskCountEstimator = requireNonNull(taskCountEstimator, "taskCountEstimator is null");
-    }
-
-    @Override
-    public Pattern<JoinNode> getPattern()
-    {
-        return PATTERN;
-    }
-
-    @Override
-    public Result apply(JoinNode joinNode, Captures captures, Context context)
-    {
-        JoinDistributionType joinDistributionType = getJoinDistributionType(context.getSession());
-        if (joinDistributionType == AUTOMATIC) {
-            return Result.ofPlanNode(getCostBasedJoin(joinNode, context));
-        }
-        return Result.ofPlanNode(getSyntacticOrderJoin(joinNode, context, joinDistributionType));
     }
 
     public static boolean canReplicate(JoinNode joinNode, Context context)
@@ -181,6 +168,39 @@ public class DetermineJoinDistributionType
                 .sum();
     }
 
+    private static boolean mustPartition(JoinNode joinNode)
+    {
+        JoinNode.Type type = joinNode.getType();
+        // With REPLICATED, the unmatched rows from right-side would be duplicated.
+        return type == RIGHT || type == FULL;
+    }
+
+    private static boolean mustReplicate(JoinNode joinNode, Context context)
+    {
+        JoinNode.Type type = joinNode.getType();
+        if (joinNode.getCriteria().isEmpty() && (type == INNER || type == LEFT)) {
+            // There is nothing to partition on
+            return true;
+        }
+        return isAtMostScalar(joinNode.getRight(), context.getLookup());
+    }
+
+    @Override
+    public Pattern<JoinNode> getPattern()
+    {
+        return PATTERN;
+    }
+
+    @Override
+    public Result apply(JoinNode joinNode, Captures captures, Context context)
+    {
+        JoinDistributionType joinDistributionType = getJoinDistributionType(context.getSession());
+        if (joinDistributionType == AUTOMATIC) {
+            return Result.ofPlanNode(getCostBasedJoin(joinNode, context));
+        }
+        return Result.ofPlanNode(getSyntacticOrderJoin(joinNode, context, joinDistributionType));
+    }
+
     private PlanNode getCostBasedJoin(JoinNode joinNode, Context context)
     {
         List<PlanNodeWithCost> possibleJoinNodes = new ArrayList<>();
@@ -189,12 +209,17 @@ public class DetermineJoinDistributionType
         addJoinsWithDifferentDistributions(joinNode.flipChildren(), possibleJoinNodes, context);
 
         if (possibleJoinNodes.stream().anyMatch(result -> result.getCost().hasUnknownComponents()) || possibleJoinNodes.isEmpty()) {
-            return getSizeBasedJoin(joinNode, context);
+            log.debug("Unknown COST, doing SIZE based join");
+            final JoinNode sizeBasedJoin = getSizeBasedJoin(joinNode, context);
+            return sizeBasedJoin;
         }
 
         // Using Ordering to facilitate rule determinism
         Ordering<PlanNodeWithCost> planNodeOrderings = costComparator.forSession(context.getSession()).onResultOf(PlanNodeWithCost::getCost);
-        return planNodeOrderings.min(possibleJoinNodes).getPlanNode();
+        PlanNode minCostPlan = planNodeOrderings.min(possibleJoinNodes).getPlanNode();
+        log.debug("COST based min plan found");
+
+        return minCostPlan;
     }
 
     private JoinNode getSizeBasedJoin(JoinNode joinNode, Context context)
@@ -256,6 +281,7 @@ public class DetermineJoinDistributionType
 
     private JoinNode getSyntacticOrderJoin(JoinNode joinNode, Context context, JoinDistributionType joinDistributionType)
     {
+        log.debug("SYNTATIC Order Join chosen");
         if (mustPartition(joinNode)) {
             return joinNode.withDistributionType(PARTITIONED);
         }
@@ -266,23 +292,6 @@ public class DetermineJoinDistributionType
             return joinNode.withDistributionType(PARTITIONED);
         }
         return joinNode.withDistributionType(REPLICATED);
-    }
-
-    private static boolean mustPartition(JoinNode joinNode)
-    {
-        JoinNode.Type type = joinNode.getType();
-        // With REPLICATED, the unmatched rows from right-side would be duplicated.
-        return type == RIGHT || type == FULL;
-    }
-
-    private static boolean mustReplicate(JoinNode joinNode, Context context)
-    {
-        JoinNode.Type type = joinNode.getType();
-        if (joinNode.getCriteria().isEmpty() && (type == INNER || type == LEFT)) {
-            // There is nothing to partition on
-            return true;
-        }
-        return isAtMostScalar(joinNode.getRight(), context.getLookup());
     }
 
     private PlanNodeWithCost getJoinNodeWithCost(Context context, JoinNode possibleJoinNode)
