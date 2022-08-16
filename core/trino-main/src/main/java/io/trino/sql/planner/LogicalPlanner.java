@@ -223,6 +223,8 @@ public class LogicalPlanner
 
     public Plan plan(Analysis analysis, Stage stage, boolean collectPlanStatistics)
     {
+        OptTrace.begin(this.session.getOptTrace(), "LogicalPlanner.plan (stage %s)", stage.name());
+
         PlanNode root = planStatement(analysis, analysis.getStatement());
 
         if (LOG.isDebugEnabled()) {

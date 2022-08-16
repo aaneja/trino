@@ -34,6 +34,7 @@ import io.trino.matching.Pattern;
 import io.trino.metadata.Metadata;
 import io.trino.sql.PlannerContext;
 import io.trino.sql.planner.EqualityInference;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.planner.OptimizerConfig.JoinDistributionType;
 import io.trino.sql.planner.PlanNodeIdAllocator;
 import io.trino.sql.planner.Symbol;
@@ -51,6 +52,7 @@ import io.trino.sql.planner.plan.ProjectNode;
 import io.trino.sql.tree.ComparisonExpression;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.SymbolReference;
+import org.apache.commons.math3.util.Pair;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -202,17 +204,31 @@ public class ReorderJoins
         private JoinEnumerationResult chooseJoinOrder(LinkedHashSet<PlanNode> sources, List<Symbol> outputSymbols)
         {
             context.checkTimeoutNotExhausted();
+            OptTrace.begin(context.getOptTrace(), "chooseJoinOrder");
+            OptTrace.trace(context.getOptTrace(), sources, 0, "Join Sources :");
+
 
             Set<PlanNode> multiJoinKey = ImmutableSet.copyOf(sources);
             JoinEnumerationResult bestResult = memo.get(multiJoinKey);
             if (bestResult == null) {
+                OptTrace.msg(context.getOptTrace(), "No result in memo. Will enumerate.", true);
+
                 checkState(sources.size() > 1, "sources size is less than or equal to one");
                 ImmutableList.Builder<JoinEnumerationResult> resultBuilder = ImmutableList.builder();
                 Set<Set<Integer>> partitions = generatePartitions(sources.size());
                 for (Set<Integer> partition : partitions) {
+                    OptTrace.begin(context.getOptTrace(), "createJoinAccordingToPartitioning");
+                    OptTrace.trace(context.getOptTrace(), partition, "Next partition %d-way : ", sources.size());
+
                     JoinEnumerationResult result = createJoinAccordingToPartitioning(sources, outputSymbols, partition);
+
+                    OptTrace.end(context.getOptTrace(), "createJoinAccordingToPartitioning");
+                    result.trace(context.getOptTrace(), 0, "Next enumerated join :");
+
                     if (result.equals(UNKNOWN_COST_RESULT)) {
                         memo.put(multiJoinKey, result);
+                        OptTrace.msg(context.getOptTrace(), "<unknown cost>", true);
+                        OptTrace.end(context.getOptTrace(), "chooseJoinOrder");
                         return result;
                     }
                     if (!result.equals(INFINITE_COST_RESULT)) {
@@ -221,16 +237,26 @@ public class ReorderJoins
                 }
 
                 List<JoinEnumerationResult> results = resultBuilder.build();
+                trace(context.getOptTrace(), results, 0, "All results :");
+
                 if (results.isEmpty()) {
                     memo.put(multiJoinKey, INFINITE_COST_RESULT);
+                    OptTrace.end(context.getOptTrace(), "chooseJoinOrder");
+
                     return INFINITE_COST_RESULT;
                 }
 
                 bestResult = resultComparator.min(results);
                 memo.put(multiJoinKey, bestResult);
             }
+            else {
+                OptTrace.msg(context.getOptTrace(), "Found best result in memo.", true);
+            }
+
+            bestResult.trace(context.getOptTrace(), 1, "Best result :");
 
             bestResult.planNode.ifPresent(planNode -> log.debug("Least cost join was: %s", planNode));
+            OptTrace.end(context.getOptTrace(), "chooseJoinOrder");
             return bestResult;
         }
 
@@ -266,6 +292,11 @@ public class ReorderJoins
             LinkedHashSet<PlanNode> rightSources = sources.stream()
                     .filter(source -> !leftSources.contains(source))
                     .collect(toCollection(LinkedHashSet::new));
+
+            OptTrace.trace(context.getOptTrace(), sources, 1, "Sources %d-way :", sources.size());
+            OptTrace.trace(context.getOptTrace(), leftSources, 1, "Left Sources %d-way :", leftSources.size());
+            OptTrace.trace(context.getOptTrace(), rightSources, 1, "Right Sources %d-way :", rightSources.size());
+
             return createJoin(leftSources, rightSources, outputSymbols);
         }
 
@@ -284,6 +315,7 @@ public class ReorderJoins
                     .map(predicate -> toEquiJoinClause((ComparisonExpression) predicate, leftSymbols))
                     .collect(toImmutableList());
             if (joinConditions.isEmpty()) {
+                OptTrace.msg(context.getOptTrace(), "No join conditions. Join cost is infinite.", true);
                 return INFINITE_COST_RESULT;
             }
             List<Expression> joinFilters = joinPredicates.stream()
@@ -301,9 +333,11 @@ public class ReorderJoins
                             .filter(leftSymbols::contains)
                             .collect(toImmutableList()));
             if (leftResult.equals(UNKNOWN_COST_RESULT)) {
+                OptTrace.msg(context.getOptTrace(), "Left input cost is unknown.", true);
                 return UNKNOWN_COST_RESULT;
             }
             if (leftResult.equals(INFINITE_COST_RESULT)) {
+                OptTrace.msg(context.getOptTrace(), "Left input cost is infinite.", true);
                 return INFINITE_COST_RESULT;
             }
 
@@ -315,9 +349,11 @@ public class ReorderJoins
                             .filter(rightSymbols::contains)
                             .collect(toImmutableList()));
             if (rightResult.equals(UNKNOWN_COST_RESULT)) {
+                OptTrace.msg(context.getOptTrace(), "Right input cost is unknown.", true);
                 return UNKNOWN_COST_RESULT;
             }
             if (rightResult.equals(INFINITE_COST_RESULT)) {
+                OptTrace.msg(context.getOptTrace(), "Right input cost is infinite.", true);
                 return INFINITE_COST_RESULT;
             }
 
@@ -410,17 +446,58 @@ public class ReorderJoins
 
         private JoinEnumerationResult setJoinNodeProperties(JoinNode joinNode)
         {
+            OptTrace.begin(this.session.getOptTrace(), "setJoinNodeProperties");
+
             if (isAtMostScalar(joinNode.getRight(), lookup)) {
+                OptTrace.msg(this.session.getOptTrace(), "Right is scalar so distribution is REPLICATED", true);
+                OptTrace.end(this.session.getOptTrace(), "setJoinNodeProperties");
                 return createJoinEnumerationResult(joinNode.withDistributionType(REPLICATED));
             }
             if (isAtMostScalar(joinNode.getLeft(), lookup)) {
+                OptTrace.msg(this.session.getOptTrace(), "Left is scalar so distribution is REPLICATED", true);
+                OptTrace.end(this.session.getOptTrace(), "setJoinNodeProperties");
                 return createJoinEnumerationResult(joinNode.flipChildren().withDistributionType(REPLICATED));
             }
             List<JoinEnumerationResult> possibleJoinNodes = getPossibleJoinNodes(joinNode, getJoinDistributionType(session));
             verify(!possibleJoinNodes.isEmpty(), "possibleJoinNodes is empty");
+            trace(context.getOptTrace(), possibleJoinNodes, 0, "Possible joins :");
+
             if (possibleJoinNodes.stream().anyMatch(UNKNOWN_COST_RESULT::equals)) {
+                OptTrace.msg(this.session.getOptTrace(), "Result : <unknown>", true);
+                OptTrace.end(this.session.getOptTrace(), "setJoinNodeProperties");
                 return UNKNOWN_COST_RESULT;
             }
+
+            if (this.session.getOptTrace().isPresent()) {
+                OptTrace optTrace = this.session.getOptTrace().get();
+                JoinEnumerationResult minResult = resultComparator.min(possibleJoinNodes);
+                if (minResult.planNode.isPresent()) {
+                    PlanNode minJoin = minResult.planNode.get();
+                    Integer minTraceId = optTrace.getTraceId(minJoin);
+
+                    if (possibleJoinNodes.size() > 1 && minTraceId != -1) {
+                        optTrace.incrIndent(1);
+                        for (JoinEnumerationResult currentResult : possibleJoinNodes) {
+                            if (currentResult.planNode.isPresent()) {
+                                PlanNode currentJoin = currentResult.planNode.get();
+                                Integer currentTraceId = optTrace.getTraceId(currentJoin);
+                                if (!currentTraceId.equals(minTraceId)) {
+                                    Pair<String, String> joinStrings = optTrace.getJoinStrings(currentJoin);
+                                    requireNonNull(joinStrings, "join strings are null");
+                                    requireNonNull(joinStrings.getKey(), "join string is null");
+                                    optTrace.msg("Next enumerated join (pruned) : (%s , trace id %d)",
+                                            true, joinStrings.getKey(), currentTraceId.intValue());
+                                }
+                            }
+                        }
+                        optTrace.decrIndent(1);
+                    }
+                }
+
+                minResult.trace(this.session.getOptTrace(), 1, "Result :");
+                OptTrace.end(this.session.getOptTrace(), "setJoinNodeProperties");
+            }
+
             return resultComparator.min(possibleJoinNodes);
         }
 
@@ -476,6 +553,32 @@ public class ReorderJoins
         private JoinEnumerationResult createJoinEnumerationResult(PlanNode planNode)
         {
             return JoinEnumerationResult.createJoinEnumerationResult(Optional.of(planNode), costProvider.getCost(planNode));
+        }
+
+        private static void trace(Optional<OptTrace> optTraceParam, List<JoinEnumerationResult> results,
+                int indentCnt, String msgString, Object... args)
+        {
+            if (optTraceParam.isPresent()) {
+                if (msgString != null) {
+                    optTraceParam.ifPresent(optTrace -> optTrace.incrIndent(indentCnt));
+                    optTraceParam.ifPresent(optTrace -> optTrace.msg(msgString, true, args));
+                }
+
+                if (!results.isEmpty()) {
+                    int cnt = 0;
+                    for (JoinEnumerationResult nextResult : results) {
+                        nextResult.trace(optTraceParam, 1, "Result %d :", cnt);
+                        ++cnt;
+                    }
+                }
+                else {
+                    optTraceParam.ifPresent(optTrace -> optTrace.msg("Empty.", true, args));
+                }
+
+                if (msgString != null) {
+                    optTraceParam.ifPresent(optTrace -> optTrace.decrIndent(indentCnt));
+                }
+            }
         }
     }
 
@@ -719,6 +822,29 @@ public class ReorderJoins
             checkArgument((cost.hasUnknownComponents() || cost.equals(PlanCostEstimate.infinite())) && planNode.isEmpty()
                             || (!cost.hasUnknownComponents() || !cost.equals(PlanCostEstimate.infinite())) && planNode.isPresent(),
                     "planNode should be present if and only if cost is known");
+        }
+
+        private void trace(Optional<OptTrace> optTraceParam, int indentCnt, String msgString, Object... args)
+        {
+            if (optTraceParam.isPresent()) {
+                OptTrace optTrace = optTraceParam.get();
+                Optional<PlanNode> nextJoin = this.getPlanNode();
+
+                if (nextJoin.isPresent()) {
+                    PlanNode join = nextJoin.get();
+                    Pair<String, String> joinStrings = optTrace.getJoinStrings(join);
+                    requireNonNull(joinStrings, "join strings are null");
+                    msgString = msgString + " (" + joinStrings.getKey() + " , trace id " + optTrace.getTraceId(join) + ")";
+                    optTrace.tracePlanNode(join, indentCnt, msgString, args);
+                }
+                else {
+                    optTrace.incrIndent(indentCnt);
+                    optTrace.msg("<no join present>", true);
+                    optTrace.decrIndent(indentCnt);
+                }
+
+                optTrace.tracePlanCostEstimate(this.getCost(), indentCnt, "Estimated cost :");
+            }
         }
 
         public Optional<PlanNode> getPlanNode()

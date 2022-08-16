@@ -21,6 +21,7 @@ import io.trino.spi.TrinoException;
 import io.trino.sql.PlannerContext;
 import io.trino.sql.SqlFormatter;
 import io.trino.sql.planner.LogicalPlanner;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.planner.Plan;
 import io.trino.sql.planner.PlanFragmenter;
 import io.trino.sql.planner.PlanNodeIdAllocator;
@@ -94,10 +95,14 @@ public class QueryExplainer
 
         switch (planType) {
             case LOGICAL:
+                OptTrace.begin(session.getOptTrace(), "getLogicalPlan");
                 Plan plan = getLogicalPlan(session, statement, parameters, warningCollector);
+                OptTrace.end(session.getOptTrace(), "getLogicalPlan");
                 return PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), plannerContext.getMetadata(), plannerContext.getFunctionManager(), plan.getStatsAndCosts(), session, 0, false);
             case DISTRIBUTED:
+                OptTrace.begin(session.getOptTrace(), "getDistributedPlan");
                 SubPlan subPlan = getDistributedPlan(session, statement, parameters, warningCollector);
+                OptTrace.end(session.getOptTrace(), "getDistributedPlan");
                 return PlanPrinter.textDistributedPlan(subPlan, plannerContext.getMetadata(), plannerContext.getFunctionManager(), session, false);
             case IO:
                 return textIoPlan(getLogicalPlan(session, statement, parameters, warningCollector), plannerContext, session);

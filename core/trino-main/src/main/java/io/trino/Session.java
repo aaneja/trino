@@ -32,6 +32,7 @@ import io.trino.spi.security.SelectedRole;
 import io.trino.spi.session.ResourceEstimates;
 import io.trino.spi.type.TimeZoneKey;
 import io.trino.sql.SqlPath;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.tree.Execute;
 import io.trino.transaction.TransactionId;
 import io.trino.transaction.TransactionManager;
@@ -81,6 +82,7 @@ public final class Session
     private final SessionPropertyManager sessionPropertyManager;
     private final Map<String, String> preparedStatements;
     private final ProtocolHeaders protocolHeaders;
+    private Optional<OptTrace> optTrace;
 
     public Session(
             QueryId queryId,
@@ -129,6 +131,7 @@ public final class Session
         this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
         this.preparedStatements = requireNonNull(preparedStatements, "preparedStatements is null");
         this.protocolHeaders = requireNonNull(protocolHeaders, "protocolHeaders is null");
+        this.optTrace = Optional.empty();
 
         requireNonNull(catalogProperties, "catalogProperties is null");
         ImmutableMap.Builder<String, Map<String, String>> catalogPropertiesBuilder = ImmutableMap.builder();
@@ -149,6 +152,22 @@ public final class Session
     {
         return identity.getUser();
     }
+
+    public Optional<OptTrace> getOptTrace()
+    {
+        return optTrace;
+    }
+
+    public void setOptTrace(Optional<OptTrace> optTraceParam)
+    {
+        optTrace = optTraceParam;
+    }
+
+    public void allocOptTrace(String dirPath)
+    {
+        setOptTrace(Optional.of(new OptTrace(dirPath, null, null)));
+    }
+
 
     public Identity getIdentity()
     {

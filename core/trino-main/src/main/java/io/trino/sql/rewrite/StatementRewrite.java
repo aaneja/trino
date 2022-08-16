@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableSet;
 import io.trino.Session;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.sql.analyzer.AnalyzerFactory;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.NodeRef;
 import io.trino.sql.tree.Parameter;
@@ -48,6 +49,7 @@ public final class StatementRewrite
             Map<NodeRef<Parameter>, Expression> parameterLookup,
             WarningCollector warningCollector)
     {
+        OptTrace.begin(session.getOptTrace(), "rewrite");
         for (Rewrite rewrite : rewrites) {
             node = requireNonNull(
                     rewrite.rewrite(
@@ -59,6 +61,7 @@ public final class StatementRewrite
                             warningCollector),
                     "Statement rewrite returned null");
         }
+        OptTrace.end(session.getOptTrace(), "rewrite");
         return node;
     }
 

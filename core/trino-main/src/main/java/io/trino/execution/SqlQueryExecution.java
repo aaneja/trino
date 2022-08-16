@@ -161,6 +161,12 @@ public class SqlQueryExecution
             TaskSourceFactory taskSourceFactory,
             TaskDescriptorStorage taskDescriptorStorage)
     {
+        if (stateMachine.getSession().getOptTrace().isEmpty()) {
+            stateMachine.getSession().allocOptTrace("/tmp");
+            final BasicQueryInfo queryInfo = stateMachine.getBasicQueryInfo(Optional.empty());
+            stateMachine.getSession().getOptTrace().ifPresent(optTrace -> optTrace.setQueryInfo(queryInfo));
+        }
+
         try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
             this.slug = requireNonNull(slug, "slug is null");
             this.plannerContext = requireNonNull(plannerContext, "plannerContext is null");
