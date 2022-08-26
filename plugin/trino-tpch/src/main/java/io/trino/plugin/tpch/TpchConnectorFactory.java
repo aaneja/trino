@@ -58,7 +58,7 @@ public class TpchConnectorFactory
 
     public TpchConnectorFactory(int defaultSplitsPerNode)
     {
-        this(defaultSplitsPerNode, true);
+        this(defaultSplitsPerNode, false);
     }
 
     public TpchConnectorFactory(int defaultSplitsPerNode, boolean predicatePushdownEnabled)
@@ -81,7 +81,7 @@ public class TpchConnectorFactory
         int splitsPerNode = getSplitsPerNode(properties);
         ColumnNaming columnNaming = ColumnNaming.valueOf(properties.getOrDefault(TPCH_COLUMN_NAMING_PROPERTY, ColumnNaming.SIMPLIFIED.name()).toUpperCase(ENGLISH));
         DecimalTypeMapping decimalTypeMapping = DecimalTypeMapping.valueOf(properties.getOrDefault(TPCH_DOUBLE_TYPE_MAPPING_PROPERTY, DecimalTypeMapping.DOUBLE.name()).toUpperCase(ENGLISH));
-        boolean partitioningEnabled = Boolean.parseBoolean(properties.getOrDefault(TPCH_PARTITIONING_ENABLED, "true"));
+        boolean partitioningEnabled = Boolean.parseBoolean(properties.getOrDefault(TPCH_PARTITIONING_ENABLED, "false"));
         NodeManager nodeManager = context.getNodeManager();
 
         return new Connector()
