@@ -14,6 +14,8 @@
 package io.trino.sql.planner.planprinter;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
+import com.google.common.base.Joiner;
 import io.airlift.json.JsonCodec;
 import io.trino.cost.PlanNodeStatsAndCostSummary;
 
@@ -55,6 +57,7 @@ public class JsonRenderer
                 children);
     }
 
+    @JsonPropertyOrder({"name", "identifier", "details", "children"})
     public static class JsonRenderedNode
     {
         private final String id;
@@ -83,7 +86,7 @@ public class JsonRenderer
             this.children = requireNonNull(children, "children is null");
         }
 
-        @JsonProperty
+//        @JsonProperty
         public String getId()
         {
             return id;
@@ -96,12 +99,12 @@ public class JsonRenderer
         }
 
         @JsonProperty
-        public Map<String, String> getDescriptor()
+        public String getIdentifier()
         {
-            return descriptor;
+            return Joiner.on(",").withKeyValueSeparator("=").join(descriptor);
         }
 
-        @JsonProperty
+//        @JsonProperty
         public List<TypedSymbol> getOutputs()
         {
             return outputs;
@@ -113,7 +116,7 @@ public class JsonRenderer
             return details;
         }
 
-        @JsonProperty
+//        @JsonProperty
         public List<PlanNodeStatsAndCostSummary> getEstimates()
         {
             return estimates;
