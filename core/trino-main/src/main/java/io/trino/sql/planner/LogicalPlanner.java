@@ -224,7 +224,16 @@ public class LogicalPlanner
 
     public Plan plan(Analysis analysis, Stage stage, boolean collectPlanStatistics)
     {
+        OptTrace.begin(this.session.getOptTrace(), "LogicalPlanner.plan (stage %s)", stage.name());
+
         PlanNode root = planStatement(analysis, analysis.getStatement());
+
+        if (this.session.getOptTrace().isPresent()) {
+            OptTrace optTrace = session.getOptTrace().get();
+            optTrace.setTypeProvider(symbolAllocator.getTypes());
+            optTrace.assignTraceIds(root, analysis.getStatement());
+            optTrace.tracePlanNode(root, 0, "Initial root : ");
+        }
 
         if (LOG.isDebugEnabled()) {
             LOG.debug("Initial plan:\n%s", PlanPrinter.textLogicalPlan(
@@ -244,7 +253,10 @@ public class LogicalPlanner
 
         if (stage.ordinal() >= OPTIMIZED.ordinal()) {
             for (PlanOptimizer optimizer : planOptimizers) {
+                OptTrace.begin(this.session.getOptTrace(), "optimize (%s)", optimizer.getClass().getSimpleName());
                 root = optimizer.optimize(root, session, symbolAllocator.getTypes(), symbolAllocator, idAllocator, warningCollector, tableStatsProvider);
+                OptTrace.end(this.session.getOptTrace(), "optimize (%s)", optimizer.getClass().getSimpleName());
+
                 requireNonNull(root, format("%s returned a null plan", optimizer.getClass().getName()));
 
                 if (LOG.isDebugEnabled()) {
@@ -274,6 +286,9 @@ public class LogicalPlanner
             CostProvider costProvider = new CachingCostProvider(costCalculator, statsProvider, Optional.empty(), session, types);
             statsAndCosts = StatsAndCosts.create(root, statsProvider, costProvider);
         }
+        OptTrace.trace(this.session.getOptTrace(), root, 0, "Final root : ");
+        OptTrace.traceJoinIdMap(this.session.getOptTrace(), 0, "Join id map : ");
+        OptTrace.end(this.session.getOptTrace(), "LogicalPlanner.plan (stage %s)", stage.name());
         return new Plan(root, types, statsAndCosts);
     }
 

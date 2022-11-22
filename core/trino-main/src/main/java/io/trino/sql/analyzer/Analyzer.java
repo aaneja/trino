@@ -18,6 +18,7 @@ import com.google.common.collect.Iterables;
 import io.trino.Session;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.rewrite.StatementRewrite;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.FunctionCall;
@@ -73,6 +74,8 @@ public class Analyzer
 
     public Analysis analyze(Statement statement, QueryType queryType)
     {
+        OptTrace.begin(session.getOptTrace(), "analyze");
+        OptTrace.queryInfo(session.getOptTrace());
         Statement rewrittenStatement = statementRewrite.rewrite(analyzerFactory, session, statement, parameters, parameterLookup, warningCollector);
         Analysis analysis = new Analysis(rewrittenStatement, parameterLookup, queryType);
         StatementAnalyzer analyzer = statementAnalyzerFactory.createStatementAnalyzer(analysis, session, warningCollector, CorrelationSupport.ALLOWED);
@@ -85,6 +88,8 @@ public class Analyzer
                                 accessControlInfo.getSecurityContext(session.getRequiredTransactionId(), session.getQueryId()),
                                 tableName,
                                 columns)));
+        OptTrace.end(session.getOptTrace(), "analyze");
+
         return analysis;
     }
 

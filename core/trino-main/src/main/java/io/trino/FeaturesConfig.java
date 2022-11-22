@@ -101,6 +101,7 @@ public class FeaturesConfig
 
     private boolean hideInaccessibleColumns;
     private boolean forceSpillingJoin;
+    private boolean enableOptimizerTrace;
 
     public enum DataIntegrityVerification
     {
@@ -108,6 +109,17 @@ public class FeaturesConfig
         ABORT,
         RETRY,
         /**/;
+    }
+
+    public boolean isEnableOptimizerTrace()
+    {
+        return enableOptimizerTrace;
+    }
+
+    public FeaturesConfig setEnableOptimizerTrace(boolean value)
+    {
+        this.enableOptimizerTrace = value;
+        return this;
     }
 
     public boolean isOmitDateTimeTypePrecision()

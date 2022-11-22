@@ -22,6 +22,7 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.client.ProtocolHeaders;
 import io.trino.connector.CatalogHandle;
+import io.trino.metadata.Metadata;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.security.AccessControl;
 import io.trino.security.SecurityContext;
@@ -33,6 +34,9 @@ import io.trino.spi.security.SelectedRole;
 import io.trino.spi.session.ResourceEstimates;
 import io.trino.spi.type.TimeZoneKey;
 import io.trino.sql.SqlPath;
+import io.trino.sql.parser.SqlParser;
+import io.trino.sql.planner.OptTrace;
+import io.trino.sql.planner.TypeProvider;
 import io.trino.sql.tree.Execute;
 import io.trino.transaction.TransactionId;
 import io.trino.transaction.TransactionManager;
@@ -51,6 +55,7 @@ import java.util.stream.Collectors;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static io.trino.SystemSessionProperties.isEnableOptimizerTrace;
 import static io.trino.client.ProtocolHeaders.TRINO_HEADERS;
 import static io.trino.spi.StandardErrorCode.NOT_FOUND;
 import static io.trino.util.Failures.checkCondition;
@@ -82,6 +87,7 @@ public final class Session
     private final SessionPropertyManager sessionPropertyManager;
     private final Map<String, String> preparedStatements;
     private final ProtocolHeaders protocolHeaders;
+    private Optional<OptTrace> optTrace = Optional.empty();
 
     public Session(
             QueryId queryId,
@@ -277,6 +283,23 @@ public final class Session
         String sql = preparedStatements.get(name);
         checkCondition(sql != null, NOT_FOUND, "Prepared statement not found: " + name);
         return sql;
+    }
+
+    public Optional<OptTrace> getOptTrace()
+    {
+        return optTrace;
+    }
+
+    public void setOptTrace(Optional<OptTrace> optTraceParam)
+    {
+        optTrace = optTraceParam;
+    }
+
+    public void allocOptTrace(String dirPath, Metadata metadata, Session session, TypeProvider types, SqlParser parser)
+    {
+        if (isEnableOptimizerTrace(this)) {
+            setOptTrace(Optional.of(new OptTrace(dirPath, metadata, session, types, parser, null, null, null, null)));
+        }
     }
 
     public ProtocolHeaders getProtocolHeaders()
@@ -541,6 +564,7 @@ public final class Session
         private final SessionPropertyManager sessionPropertyManager;
         private final Map<String, String> preparedStatements = new HashMap<>();
         private ProtocolHeaders protocolHeaders = TRINO_HEADERS;
+        private Optional<OptTrace> optTrace;
 
         private SessionBuilder(SessionPropertyManager sessionPropertyManager)
         {

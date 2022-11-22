@@ -173,6 +173,12 @@ public class SqlQueryExecution
             EventDrivenTaskSourceFactory eventDrivenTaskSourceFactory,
             TaskDescriptorStorage taskDescriptorStorage)
     {
+        if (!stateMachine.getSession().getOptTrace().isPresent()) {
+            stateMachine.getSession().allocOptTrace("/tmp", plannerContext.getMetadata(), stateMachine.getSession(), null, null);
+            final BasicQueryInfo queryInfo = stateMachine.getBasicQueryInfo(Optional.empty());
+            stateMachine.getSession().getOptTrace().ifPresent(optTrace -> optTrace.setQueryInfo(queryInfo));
+        }
+
         try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
             this.slug = requireNonNull(slug, "slug is null");
             this.plannerContext = requireNonNull(plannerContext, "plannerContext is null");

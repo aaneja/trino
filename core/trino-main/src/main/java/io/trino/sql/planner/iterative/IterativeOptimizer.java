@@ -32,6 +32,7 @@ import io.trino.matching.Match;
 import io.trino.matching.Pattern;
 import io.trino.spi.TrinoException;
 import io.trino.sql.PlannerContext;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.planner.PlanNodeIdAllocator;
 import io.trino.sql.planner.RuleStatsRecorder;
 import io.trino.sql.planner.SymbolAllocator;
@@ -54,6 +55,7 @@ import java.util.stream.Stream;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.trino.SystemSessionProperties.isEnableOptimizerTrace;
 import static io.trino.matching.Capture.newCapture;
 import static io.trino.spi.StandardErrorCode.OPTIMIZER_TIMEOUT;
 import static java.lang.String.format;
@@ -114,7 +116,20 @@ public class IterativeOptimizer
         Lookup lookup = Lookup.from(planNode -> Stream.of(memo.resolve(planNode)));
 
         Duration timeout = SystemSessionProperties.getOptimizerTimeout(session);
+
+        StatsProvider statsProvider = new CachingStatsProvider(
+                statsCalculator,
+                Optional.of(memo),
+                lookup,
+                session,
+                types,
+                tableStatsProvider);
+        CostProvider costProvider = new CachingCostProvider(costCalculator, statsProvider, session, types);
+
         Context context = new Context(memo, lookup, idAllocator, symbolAllocator, nanoTime(), timeout.toMillis(), session, warningCollector, tableStatsProvider);
+        context.allocOptTrace("/tmp", costProvider, statsProvider);
+        OptTrace.assignTraceIds(session.getOptTrace(), context.memo.getNode(memo.getRootGroup()), null);
+
         exploreGroup(memo.getRootGroup(), context);
 
         return memo.extract();
@@ -128,6 +143,7 @@ public class IterativeOptimizer
 
     private boolean exploreGroup(int group, Context context)
     {
+        OptTrace.begin(context.session.getOptTrace(), "exploreGroup : group %d", group);
         // tracks whether this group or any children groups change as
         // this method executes
         boolean progress = exploreNode(group, context);
@@ -143,12 +159,15 @@ public class IterativeOptimizer
             }
         }
 
+        OptTrace.end(context.session.getOptTrace(), "exploreGroup : group %s , progress %s", group, progress ? "true" : "false");
         return progress;
     }
 
     private boolean exploreNode(int group, Context context)
     {
         PlanNode node = context.memo.getNode(group);
+        OptTrace.begin(context.session.getOptTrace(), "exploreNode : group %d , node id %s , %s",
+                group, node.getId(), node.getClass().getSimpleName());
 
         boolean done = false;
         boolean progress = false;
@@ -166,12 +185,23 @@ public class IterativeOptimizer
                 boolean applied = false;
 
                 if (rule.isEnabled(context.session)) {
+                    OptTrace.msg(context.session.getOptTrace(), "Next enabled rule : %s", true, rule.getClass().getSimpleName());
+
                     invoked = true;
                     Rule.Result result = transform(node, rule, context);
                     timeEnd = nanoTime();
 
                     if (result.getTransformedPlan().isPresent()) {
+                        OptTrace.begin(context.session.getOptTrace(), "Memo.replace (applied rule %s)", rule.getClass().getSimpleName());
+                        OptTrace.msg(context.session.getOptTrace(), "Old node : group %s , node id %s , %s", true,
+                                group, node.getId(), node.getClass().getSimpleName());
+
                         node = context.memo.replace(group, result.getTransformedPlan().get(), rule.getClass().getName());
+
+                        OptTrace.msg(context.session.getOptTrace(), "New node : group %s , node id %s , %s", true,
+                                group, node.getId(), node.getClass().getSimpleName());
+
+                        OptTrace.end(context.session.getOptTrace(), "Memo.replace(applied rule %s)", rule.getClass().getSimpleName());
 
                         applied = true;
                         done = false;
@@ -186,11 +216,15 @@ public class IterativeOptimizer
             }
         }
 
+        OptTrace.end(context.session.getOptTrace(), "exploreNode : group %s , node id %s , %s",
+                group, node.getId(), node.getClass().getSimpleName());
         return progress;
     }
 
     private <T> Rule.Result transform(PlanNode node, Rule<T> rule, Context context)
     {
+        OptTrace.begin(context.session.getOptTrace(), "transform");
+
         Capture<T> nodeCapture = newCapture();
         Pattern<T> pattern = rule.getPattern().capturedAs(nodeCapture);
         Iterator<Match> matches = pattern.match(node, context.lookup).iterator();
@@ -200,7 +234,10 @@ public class IterativeOptimizer
             Rule.Result result;
             try {
                 long start = nanoTime();
+                OptTrace.begin(context.session.getOptTrace(), "rule.apply : %s", rule.getClass().getSimpleName());
                 result = rule.apply(match.capture(nodeCapture), match.captures(), ruleContext(context));
+                OptTrace.end(context.session.getOptTrace(), "rule.apply : %s , applied? %s", rule.getClass().getSimpleName(),
+                        result.isEmpty() ? "false" : "true");
 
                 if (LOG.isDebugEnabled() && !result.isEmpty()) {
                     LOG.debug(
@@ -238,6 +275,8 @@ public class IterativeOptimizer
             }
         }
 
+        OptTrace.msg(context.session.getOptTrace(), "no match : rule %s", true, rule.getClass().getSimpleName());
+        OptTrace.end(context.session.getOptTrace(), "transform");
         return Rule.Result.empty();
     }
 
@@ -246,6 +285,9 @@ public class IterativeOptimizer
         boolean progress = false;
 
         PlanNode expression = context.memo.getNode(group);
+        OptTrace.begin(context.session.getOptTrace(), "exploreChildren : group %s , node id %s , %s",
+                group, expression.getId(), expression.getClass().getSimpleName());
+
         for (PlanNode child : expression.getSources()) {
             checkState(child instanceof GroupReference, "Expected child to be a group reference. Found: " + child.getClass().getName());
 
@@ -253,6 +295,9 @@ public class IterativeOptimizer
                 progress = true;
             }
         }
+
+        OptTrace.end(context.session.getOptTrace(), "exploreChildren : group %s , node id %s , %s , progress ? %s",
+                group, expression.getId(), expression.getClass().getSimpleName(), progress ? "true" : "false");
 
         return progress;
     }
@@ -385,6 +430,19 @@ public class IterativeOptimizer
         {
             ruleStats.computeIfAbsent(rule, ignored -> new RuleInvocationStats())
                     .recordRuleInvocation(invoked, applied, elapsedNanos);
+        }
+
+        public void allocOptTrace(String dirPath, CostProvider costProvider, StatsProvider statsProvider)
+        {
+            if (session != null && isEnableOptimizerTrace(session)) {
+                if (session.getOptTrace().isEmpty()) {
+                    session.setOptTrace(Optional.of(new OptTrace(dirPath, null, session, null, null,
+                            lookup, memo, costProvider, statsProvider)));
+                }
+                else {
+                    session.getOptTrace().ifPresent(optTrace -> optTrace.reinitialize(lookup, memo, costProvider, statsProvider));
+                }
+            }
         }
 
         private static class RuleInvocationStats

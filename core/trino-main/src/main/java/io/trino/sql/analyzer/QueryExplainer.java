@@ -21,6 +21,7 @@ import io.trino.spi.TrinoException;
 import io.trino.sql.PlannerContext;
 import io.trino.sql.SqlFormatter;
 import io.trino.sql.planner.LogicalPlanner;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.planner.Plan;
 import io.trino.sql.planner.PlanFragmenter;
 import io.trino.sql.planner.PlanNodeIdAllocator;
@@ -95,15 +96,24 @@ public class QueryExplainer
 
         return switch (planType) {
             case LOGICAL -> {
+                OptTrace.begin(session.getOptTrace(), "getLogicalPlan");
                 Plan plan = getLogicalPlan(session, statement, parameters, warningCollector);
+                OptTrace.end(session.getOptTrace(), "getLogicalPlan");
+
                 yield PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), plannerContext.getMetadata(), plannerContext.getFunctionManager(), plan.getStatsAndCosts(), session, 0, false);
             }
-            case DISTRIBUTED -> PlanPrinter.textDistributedPlan(
-                    getDistributedPlan(session, statement, parameters, warningCollector),
-                    plannerContext.getMetadata(),
-                    plannerContext.getFunctionManager(),
-                    session,
-                    false);
+            case DISTRIBUTED -> {
+                OptTrace.begin(session.getOptTrace(), "getDistributedPlan");
+                final String distributedPlan = PlanPrinter.textDistributedPlan(
+                        getDistributedPlan(session, statement, parameters, warningCollector),
+                        plannerContext.getMetadata(),
+                        plannerContext.getFunctionManager(),
+                        session,
+                        false);
+                OptTrace.end(session.getOptTrace(), "getDistributedPlan");
+
+                yield distributedPlan;
+            }
             case IO -> textIoPlan(getLogicalPlan(session, statement, parameters, warningCollector), plannerContext, session);
             default -> throw new IllegalArgumentException("Unhandled plan type: " + planType);
         };

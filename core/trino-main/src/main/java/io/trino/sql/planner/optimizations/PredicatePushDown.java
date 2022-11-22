@@ -32,6 +32,7 @@ import io.trino.sql.planner.EqualityInference;
 import io.trino.sql.planner.ExpressionInterpreter;
 import io.trino.sql.planner.LiteralEncoder;
 import io.trino.sql.planner.NoOpSymbolResolver;
+import io.trino.sql.planner.OptTrace;
 import io.trino.sql.planner.PlanNodeIdAllocator;
 import io.trino.sql.planner.Symbol;
 import io.trino.sql.planner.SymbolAllocator;
@@ -146,15 +147,22 @@ public class PredicatePushDown
     @Override
     public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector, TableStatsProvider tableStatsProvider)
     {
+        OptTrace.begin(session.getOptTrace(), "PredicatePushDown::optimize");
+        OptTrace.trace(session.getOptTrace(), plan, 0, "Initial plan :");
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
         requireNonNull(types, "types is null");
         requireNonNull(idAllocator, "idAllocator is null");
 
-        return SimplePlanRewriter.rewriteWith(
+        PlanNode rewrittenPlanNode = SimplePlanRewriter.rewriteWith(
                 new Rewriter(symbolAllocator, idAllocator, plannerContext, typeAnalyzer, session, types, useTableProperties, dynamicFiltering),
                 plan,
                 TRUE_LITERAL);
+
+        OptTrace.trace(session.getOptTrace(), rewrittenPlanNode, 0, "Final plan :");
+        OptTrace.end(session.getOptTrace(), "PredicatePushDown::optimize");
+
+        return rewrittenPlanNode;
     }
 
     private static class Rewriter

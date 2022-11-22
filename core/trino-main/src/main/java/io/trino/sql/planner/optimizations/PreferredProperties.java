@@ -33,7 +33,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.Objects.requireNonNull;
 
-class PreferredProperties
+public class PreferredProperties
 {
     private final Optional<Global> globalProperties;
     private final List<LocalProperty<Symbol>> localProperties;
